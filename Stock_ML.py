@@ -23,7 +23,7 @@ n_clusters = st.sidebar.slider("Number of Clusters (KMeans/Agglomerative)", min_
 eps_val = st.sidebar.slider("DBSCAN: Epsilon (Neighborhood Size)", 0.1, 5.0, 1.0, step=0.1)
 min_samples_val = st.sidebar.slider("DBSCAN: Min Samples", 2, 10, 3)
 date_range = st.sidebar.date_input("Select Date Range", ["2024-01-01", "2025-06-01"])
-mode = st.sidebar.selectbox("Cluster by", ["Overall returns", "Day-of-week patterns"])
+mode = st.sidebar.selectbox("Cluster by", ["Overall returns", "Day-of-week patterns", "Return & Volume only"])
 
 # Optional filters
 selected_sector = st.sidebar.multiselect(
@@ -59,12 +59,17 @@ def fetch_data(tickers, start, end):
         for ticker in tickers
         if ticker in raw_data and 'Close' in raw_data[ticker]
     })
-    return adj_close
+    volume_data = pd.DataFrame({
+        ticker: raw_data[ticker]['Volume']
+        for ticker in tickers
+        if ticker in raw_data and 'Volume' in raw_data[ticker]
+    })
+    return adj_close, volume_data
 
 # Download data
 with st.spinner("Fetching data from Yahoo Finance..."):
     try:
-        adj_close = fetch_data(tickers, date_range[0], date_range[1])
+        adj_close, volume_data = fetch_data(tickers, date_range[0], date_range[1])
     except Exception as e:
         st.error(f"❌ Error while downloading data: {e}")
         st.stop()
@@ -76,13 +81,25 @@ if adj_close.empty:
 returns = adj_close.pct_change()
 returns_clean = returns.replace([np.inf, -np.inf], np.nan).fillna(method='ffill').fillna(method='bfill')
 
+# Include average volume as additional feature
+avg_volume = volume_data.mean()
+
+# Prepare features
 if mode == "Day-of-week patterns":
     returns_clean['Day'] = returns_clean.index.day_name()
     weekday_avg = returns_clean.groupby('Day').mean().T
     weekday_avg = weekday_avg[['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']]
     X = weekday_avg
+    X['Avg Volume'] = avg_volume[X.index]
+elif mode == "Return & Volume only":
+    mean_returns = returns_clean.mean()
+    X = pd.DataFrame({
+        'Mean Return': mean_returns,
+        'Avg Volume': avg_volume
+    }).dropna()
 else:
     X = returns_clean.T
+    X['Avg Volume'] = avg_volume[X.index]
 
 st.info(f"✅ {X.shape[0]} out of {len(tickers)} stocks have usable return data.")
 
@@ -124,15 +141,17 @@ fig = px.scatter(
 st.plotly_chart(fig, use_container_width=True)
 
 # Cluster-level summary
-st.subheader("📈 Cluster Averages: Return, Volatility & Count")
+st.subheader("📈 Cluster Averages: Return, Volatility, Volume & Count")
 X_df = pd.DataFrame(X_scaled, index=X.index)
 X_df['Cluster'] = labels
-X_df['Mean Return'] = X_df.index.map(lambda t: returns_clean[t].mean())
-X_df['Volatility'] = X_df.index.map(lambda t: returns_clean[t].std())
+X_df['Mean Return'] = X_df.index.map(lambda t: returns_clean[t].mean() if t in returns_clean else np.nan)
+X_df['Volatility'] = X_df.index.map(lambda t: returns_clean[t].std() if t in returns_clean else np.nan)
+X_df['Avg Volume'] = X_df.index.map(lambda t: avg_volume.get(t, np.nan))
 
 summary = X_df.groupby('Cluster').agg({
     'Mean Return': 'mean',
     'Volatility': 'mean',
+    'Avg Volume': 'mean',
     'Cluster': 'count'
 }).rename(columns={'Cluster': 'Count'}).round(4)
 
