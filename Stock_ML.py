@@ -44,22 +44,27 @@ if stock_set == "Nifty 50":
 else:
     tickers = filtered_df['Ticker'].tolist()
 
+@st.cache_data
+def fetch_data(tickers, start, end):
+    raw_data = yf.download(
+        tickers=tickers,
+        start=start,
+        end=end,
+        group_by='ticker',
+        auto_adjust=True,
+        threads=True
+    )
+    adj_close = pd.DataFrame({
+        ticker: raw_data[ticker]['Close']
+        for ticker in tickers
+        if ticker in raw_data and 'Close' in raw_data[ticker]
+    })
+    return adj_close
+
 # Download data
 with st.spinner("Fetching data from Yahoo Finance..."):
     try:
-        raw_data = yf.download(
-            tickers=tickers,
-            start=date_range[0],
-            end=date_range[1],
-            group_by='ticker',
-            auto_adjust=True,
-            threads=True
-        )
-        adj_close = pd.DataFrame({
-            ticker: raw_data[ticker]['Close']
-            for ticker in tickers
-            if ticker in raw_data and 'Close' in raw_data[ticker]
-        })
+        adj_close = fetch_data(tickers, date_range[0], date_range[1])
     except Exception as e:
         st.error(f"❌ Error while downloading data: {e}")
         st.stop()
